@@ -58,9 +58,12 @@ commodity and FX must use lognormal. Swaptions here use normal vol.
 - Tenors {0.5, 1, 3, 5, 10}, same RW for all tenors.
 - Within bucket (1-15): rho = rho_name (35%) x rho_tenor (65%) x rho_basis
   (99.9% bond vs CDS curve). Buckets 17-18: rho_name 80%.
-- Across buckets: gamma = gamma_rating x gamma_sector; gamma_rating = 50% for
-  IG vs HY within buckets 1-15, else 1. gamma_sector from Table 5, e.g.
-  4/12 vs 6/14: 5%; any of 1-15 vs 17 or 18: 45%; 17 vs 18: 75%.
+- Across buckets: gamma = gamma_rating x gamma_sector. MAR21.57: gamma_rating
+  is 50% "where the two buckets b and c are both in buckets 1 to 15 and have a
+  different rating category (either IG or HY/NR)", and 1 otherwise, so an HY
+  single name against an IG index (14 vs 17) takes gamma_rating = 1.
+  gamma_sector from Table 5, e.g. 4/12 vs 6/14: 25%; 4/12 vs 7/15: 5%; any of
+  1-15 vs 17 or 18: 45%; 17 vs 18: 75%.
 - Bucket 16 (simple sum of absolute values) is not used here.
 
 ## Equity (MAR21.12, 21.72-80)

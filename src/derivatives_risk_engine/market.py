@@ -98,6 +98,8 @@ class Market:
         f = self.factors[name]
         if f.n == 1 or t <= f.tenors[0]:
             return float(f.values[0])
+        if t >= f.tenors[-1]:
+            return float(f.values[-1])  # flat vol beyond the last pillar
         var = np.interp(t, f.tenors, f.values**2 * f.tenors)
         return float(np.sqrt(var / t))
 

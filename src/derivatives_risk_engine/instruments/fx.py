@@ -1,6 +1,8 @@
 """FX legs against USD: outright forwards and Garman-Kohlhagen options.
 
 FX:EUR is EURUSD (USD per EUR). Notionals are in the foreign currency.
+Forwards follow covered interest parity off the two zero curves, with no
+cross-currency basis and no spot lag.
 """
 
 from __future__ import annotations

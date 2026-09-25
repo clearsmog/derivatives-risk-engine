@@ -5,13 +5,13 @@ Every name, size and price is invented.
 COMMODITIES  an LNG importer-style book: Brent-indexed supply contracts resold
              at JKM / TTF, structures sold to downstream buyers (zero-cost
              collar, capped swap, fixed swap) and partial bank hedges
-EQUITY       index put protection financed by an overwrite, a Euro Stoxx put
-             (EUR, so it carries FX), a single-stock down-and-out call, and
-             forward delta hedges
-RATES        a USD 2s10s curve trade, a payer swaption, a EUR receiver
+EQUITY       SPX 3m puts paid for by selling 1y calls (zero premium, net short
+             vega), a Euro Stoxx put (EUR, so it carries FX), a single-stock
+             down-and-out call, and forwards sized to hedge SPX and NWT delta
+RATES        a PV01-neutral USD 2s10s steepener, a payer swaption, a EUR receiver
 FX           a long EUR forward, a short EUR call, a long EUR put
-CREDIT       single-name protection bought, index protection sold (a basis
-             trade), and HY protection bought
+CREDIT       ACME protection bought against CDX IG protection sold, CS01-neutral
+             (single name vs index), and HY protection bought on ZETA
 """
 
 from __future__ import annotations
@@ -165,93 +165,60 @@ def _commodities(mkt: Market) -> list[Trade]:
     ]
 
 
+def _parallel_delta(legs: list, mkt: Market, factor: str, bump: float) -> float:
+    """P&L of `legs` for a parallel bump of one factor (whole curve or spot)."""
+    shocked = mkt.bump(factor, bump)
+    return sum(leg.pv(shocked) - leg.pv(mkt) for leg in legs)
+
+
 def _equity(mkt: Market) -> list[Trade]:
     spx, sx5e, nwt = mkt.spot("EQ:SPX"), mkt.spot("EQ:SX5E"), mkt.spot("EQ:NWT")
+    put = EquityOptionLeg("EQ:SPX", 0.25, 0.95 * spx, False, 80_000)
+    # Sell enough 1y 105% calls to pay for the puts (a zero-premium risk reversal).
+    call_unit = EquityOptionLeg("EQ:SPX", 1.0, 1.05 * spx, True, 1.0)
+    call = EquityOptionLeg("EQ:SPX", 1.0, 1.05 * spx, True, -put.pv(mkt) / call_unit.pv(mkt))
+    fwd_unit = EquityForwardLeg("EQ:SPX", 0.5, spx, 1.0)
+    spx_hedge = EquityForwardLeg(
+        "EQ:SPX", 0.5, spx,
+        -_parallel_delta([put, call], mkt, "EQ:SPX", 0.01) / _parallel_delta([fwd_unit], mkt, "EQ:SPX", 0.01),
+    )
+    doc = DownAndOutCallLeg("EQ:NWT", 1.0, nwt, 0.80 * nwt, 2_000_000)
+    nwt_unit = EquityForwardLeg("EQ:NWT", 1.0, nwt, 1.0)
+    nwt_hedge = EquityForwardLeg(
+        "EQ:NWT", 1.0, nwt,
+        -_parallel_delta([doc], mkt, "EQ:NWT", 0.01) / _parallel_delta([nwt_unit], mkt, "EQ:NWT", 0.01),
+    )
     rows = [
-        (
-            "EQ-001",
-            "SPX put 95%",
-            "Bank A",
-            [EquityOptionLeg("EQ:SPX", 0.25, 0.95 * spx, False, 80_000)],
-        ),
-        (
-            "EQ-002",
-            "SPX call overwrite 105%",
-            "Bank B",
-            [EquityOptionLeg("EQ:SPX", 1.0, 1.05 * spx, True, -80_000)],
-        ),
-        (
-            "EQ-003",
-            "SPX forward (delta hedge)",
-            "Clearing house",
-            [EquityForwardLeg("EQ:SPX", 0.5, spx, -30_000)],
-        ),
-        (
-            "EQ-004",
-            "SX5E put 90% (EUR)",
-            "Bank C",
-            [EquityOptionLeg("EQ:SX5E", 0.5, 0.90 * sx5e, False, 60_000)],
-        ),
-        (
-            "EQ-005",
-            "NWT down-and-out call",
-            "Bank D",
-            [DownAndOutCallLeg("EQ:NWT", 1.0, nwt, 0.80 * nwt, 2_000_000)],
-        ),
-        (
-            "EQ-006",
-            "NWT forward (delta hedge)",
-            "Bank D",
-            [EquityForwardLeg("EQ:NWT", 1.0, nwt, -600_000)],
-        ),
+        ("EQ-001", "SPX 3m put 95%", "Bank A", [put]),
+        ("EQ-002", "SPX 1y call 105% (sold, finances the put)", "Bank B", [call]),
+        ("EQ-003", "SPX 6m forward (delta hedge)", "Clearing house", [spx_hedge]),
+        ("EQ-004", "SX5E 6m put 90% (EUR)", "Bank C", [EquityOptionLeg("EQ:SX5E", 0.5, 0.90 * sx5e, False, 60_000)]),
+        ("EQ-005", "NWT 1y down-and-out call", "Bank D", [doc]),
+        ("EQ-006", "NWT 1y forward (delta hedge)", "Bank D", [nwt_hedge]),
     ]
     return [
-        Trade(
-            tid,
-            prod,
-            "EQUITY",
-            "EQ_DERIVATIVES",
-            cp,
-            "bank" if cp.startswith("Bank") else "exchange",
-            "EQ",
-            tuple(legs),
-        )
+        Trade(tid, prod, "EQUITY", "EQ_DERIVATIVES", cp, "bank" if cp.startswith("Bank") else "exchange", "EQ", tuple(legs))
         for tid, prod, cp, legs in rows
     ]
 
 
 def _rates(mkt: Market) -> list[Trade]:
-    k10, k2, k5e = (
-        par_rate(mkt, "USD", 0, 10),
-        par_rate(mkt, "USD", 0, 2),
-        par_rate(mkt, "EUR", 0, 5),
+    k10, k2, k5e = par_rate(mkt, "USD", 0, 10), par_rate(mkt, "USD", 0, 2), par_rate(mkt, "EUR", 0, 5)
+    ten = SwapLeg.spot_starting(mkt, "USD", 10, k10, 1.5e9)
+    two_unit = SwapLeg.spot_starting(mkt, "USD", 2, k2, 1.0)
+    # Receive 2y in PV01-neutral size: a pure 2s10s steepener.
+    two = SwapLeg.spot_starting(
+        mkt, "USD", 2, k2,
+        -_parallel_delta([ten], mkt, "IR:USD", 1e-4) / _parallel_delta([two_unit], mkt, "IR:USD", 1e-4),
     )
     atm = forward_swap_rate(mkt, "USD", 1, 11)
     rows = [
-        ("IR-001", "USD 10y pay fixed", "Bank A", [SwapLeg("USD", 0, 10, k10, 1.5e9)]),
-        (
-            "IR-002",
-            "USD 2y receive fixed",
-            "Bank B",
-            [SwapLeg("USD", 0, 2, k2, -3.5e9)],
-        ),
-        (
-            "IR-003",
-            "USD 1y x 10y payer swaption",
-            "Bank C",
-            [SwaptionLeg("USD", 1.0, 10.0, atm, True, 1e9)],
-        ),
-        (
-            "IR-004",
-            "EUR 5y receive fixed",
-            "Bank E",
-            [SwapLeg("EUR", 0, 5, k5e, -1.2e9)],
-        ),
+        ("IR-001", "USD 10y pay fixed (steepener, long leg)", "Bank A", [ten]),
+        ("IR-002", "USD 2y receive fixed (steepener, PV01-neutral)", "Bank B", [two]),
+        ("IR-003", "USD 1y x 10y payer swaption", "Bank C", [SwaptionLeg("USD", 1.0, 10.0, atm, True, 1e9)]),
+        ("IR-004", "EUR 5y receive fixed", "Bank E", [SwapLeg.spot_starting(mkt, "EUR", 5, k5e, -1.2e9)]),
     ]
-    return [
-        Trade(tid, prod, "RATES", "RATES", cp, "bank", "IR", tuple(legs))
-        for tid, prod, cp, legs in rows
-    ]
+    return [Trade(tid, prod, "RATES", "RATES", cp, "bank", "IR", tuple(legs)) for tid, prod, cp, legs in rows]
 
 
 def _fx(mkt: Market) -> list[Trade]:
@@ -284,32 +251,21 @@ def _fx(mkt: Market) -> list[Trade]:
     ]
 
 
-def _credit() -> list[Trade]:
+def _credit(mkt: Market) -> list[Trade]:
+    cdx = CDSLeg("CS:CDXIG", 5.0, 0.01, -2.5e9)
+    acme_unit = CDSLeg("CS:ACME", 5.0, 0.01, 1.0)
+    # Buy single-name protection in CS01-neutral size against the index sold.
+    acme = CDSLeg(
+        "CS:ACME", 5.0, 0.01,
+        -_parallel_delta([cdx], mkt, "CS:CDXIG", 1e-4) / _parallel_delta([acme_unit], mkt, "CS:ACME", 1e-4),
+    )
     rows = [
-        (
-            "CS-001",
-            "ACME 5y CDS (protection bought)",
-            "Bank A",
-            [CDSLeg("CS:ACME", 5.0, 0.01, 750e6)],
-        ),
-        (
-            "CS-002",
-            "CDX IG 5y (protection sold)",
-            "Bank B",
-            [CDSLeg("CS:CDXIG", 5.0, 0.01, -2.5e9)],
-        ),
-        (
-            "CS-003",
-            "ZETA 3y CDS (protection bought)",
-            "Bank C",
-            [CDSLeg("CS:ZETA", 3.0, 0.05, 400e6)],
-        ),
+        ("CS-001", "ACME 5y CDS (protection bought, CS01-neutral)", "Bank A", [acme]),
+        ("CS-002", "CDX IG 5y (protection sold)", "Bank B", [cdx]),
+        ("CS-003", "ZETA 3y CDS (protection bought)", "Bank C", [CDSLeg("CS:ZETA", 3.0, 0.05, 400e6)]),
     ]
-    return [
-        Trade(tid, prod, "CREDIT", "CREDIT", cp, "bank", "CS", tuple(legs))
-        for tid, prod, cp, legs in rows
-    ]
+    return [Trade(tid, prod, "CREDIT", "CREDIT", cp, "bank", "CS", tuple(legs)) for tid, prod, cp, legs in rows]
 
 
 def build_book(mkt: Market) -> list[Trade]:
-    return _commodities(mkt) + _equity(mkt) + _rates(mkt) + _fx(mkt) + _credit()
+    return _commodities(mkt) + _equity(mkt) + _rates(mkt) + _fx(mkt) + _credit(mkt)

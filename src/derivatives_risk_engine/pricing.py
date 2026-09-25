@@ -7,6 +7,7 @@ JKM options are quoted. Rates are a flat continuously compounded discount rate.
 from __future__ import annotations
 
 import numpy as np
+from scipy.optimize import brentq
 from scipy.stats import norm
 
 
@@ -165,6 +166,58 @@ def barrier_mc(
     return float(payoff.mean()), float(payoff.std(ddof=1) / np.sqrt(n_paths))
 
 
+def _legs_from_hazard(
+    edges: np.ndarray,
+    lam: np.ndarray,
+    recovery: float,
+    maturity: float,
+    discount,
+    time_shift: float,
+    freq: int,
+) -> tuple[float, float]:
+    """Risky annuity and protection leg for a piecewise-constant hazard curve.
+    Premium accrued to the default date is included (half a period on average)."""
+    width = np.append(np.diff(edges), np.inf)
+
+    def survival(t: float) -> float:
+        return float(np.exp(-np.sum(lam * np.minimum(np.clip(t - edges, 0.0, None), width))))
+
+    pay = np.arange(1, int(round(maturity * freq)) + 1) / freq
+    annuity = protection = 0.0
+    prev, q_prev = time_shift, 1.0
+    for t in pay[pay > time_shift]:
+        q = survival(t - time_shift)
+        df = discount(t)
+        annuity += (t - prev) * df * 0.5 * (q + q_prev)
+        protection += (1.0 - recovery) * df * (q_prev - q)
+        prev, q_prev = t, q
+    return annuity, protection
+
+
+def bootstrap_hazard(
+    spread_tenors: np.ndarray,
+    par_spreads: np.ndarray,
+    recovery: float,
+    discount,
+    time_shift: float = 0.0,
+    freq: int = 4,
+) -> np.ndarray:
+    """Piecewise-constant hazard rates such that a CDS maturing at each pillar
+    prices at its quoted par spread, solved pillar by pillar."""
+    edges = np.concatenate([[0.0], spread_tenors[:-1]])
+    lam = par_spreads / (1.0 - recovery)  # credit-triangle starting point
+    for i, (tenor, s) in enumerate(zip(spread_tenors, par_spreads)):
+
+        def value(x: float) -> float:
+            trial = lam.copy()
+            trial[i] = x
+            a, p = _legs_from_hazard(edges[: i + 1], trial[: i + 1], recovery, tenor, discount, time_shift, freq)
+            return p - s * a
+
+        lam[i] = brentq(value, 1e-8, 5.0)
+    return lam
+
+
 def cds_legs(
     spread_tenors: np.ndarray,
     par_spreads: np.ndarray,
@@ -174,31 +227,14 @@ def cds_legs(
     time_shift: float = 0.0,
     freq: int = 4,
 ) -> tuple[float, float]:
-    """Risky annuity (premium leg per unit spread) and protection leg per unit notional.
+    """Risky annuity (premium leg per unit spread) and protection leg per unit
+    notional, on a hazard curve bootstrapped from the quoted par spreads.
 
-    Hazard rates are piecewise constant between spread pillars, set by the
-    credit triangle lambda_i = s_i / (1 - R). This is a transparent
-    approximation, not the ISDA standard model (no bootstrap, no accrual on
-    default). `discount(t)` returns the discount factor to valuation-date time t.
+    Simplified against the ISDA standard model: quarterly premiums on a plain
+    year fraction, default at period end for the protection leg, no step-in or
+    accrued-premium bookkeeping. `discount(t)` returns the discount factor to
+    valuation-date time t.
     """
-    lam = par_spreads / (1.0 - recovery)
+    lam = bootstrap_hazard(spread_tenors, par_spreads, recovery, discount, time_shift, freq)
     edges = np.concatenate([[0.0], spread_tenors[:-1]])
-
-    def survival(t: float) -> float:
-        # integral of the step hazard from 0 to t
-        dur = np.clip(t - edges, 0.0, None)
-        width = np.append(np.diff(edges), np.inf)
-        return float(np.exp(-np.sum(lam * np.minimum(dur, width))))
-
-    pay = np.arange(1, int(round(maturity * freq)) + 1) / freq
-    pay = pay[pay > time_shift]
-    annuity, protection, prev = 0.0, 0.0, time_shift
-    q_prev = 1.0
-    for t in pay:
-        tau = t - time_shift
-        q = survival(tau)
-        df = discount(t)
-        annuity += (t - prev) * df * q
-        protection += (1.0 - recovery) * df * (q_prev - q)
-        prev, q_prev = t, q
-    return annuity, protection
+    return _legs_from_hazard(edges, lam, recovery, maturity, discount, time_shift, freq)

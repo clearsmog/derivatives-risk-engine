@@ -29,6 +29,7 @@ from .market import Market
 
 BUMP = {"price": 0.01, "rate": 1e-4, "spread": 1e-4, "vol": 0.01}
 NORMAL_VOL_BUMP = 1e-4  # VOL:IR:* are normal vols quoted in rate units
+NOISE_USD = 1e-6  # P&L below this under a bump is treated as no dependence
 
 
 def _bump_size(mkt: Market, name: str) -> float:
@@ -74,8 +75,8 @@ def sensitivities(
                 dn = leg.pv(mkt.bump(name, -h, p))
                 d1 = (up - dn) / (2 * h)
                 d2 = (up - 2 * v0 + dn) / h**2
-                if abs(d1) < 1e-9 and abs(d2) < 1e-9:
-                    continue
+                if abs(up - v0) < NOISE_USD and abs(dn - v0) < NOISE_USD:
+                    continue  # the leg does not depend on this pillar
                 x = float(f.values[p])
                 sens_rows.append(
                     {

@@ -173,10 +173,24 @@ def test_bachelier_atm_closed_form():
 # ---- Credit ------------------------------------------------------------------------
 
 
-def test_cds_at_par_spread_is_worth_zero_and_protection_gains_on_widening(mkt):
+@pytest.mark.parametrize("name", ["CS:ACME", "CS:ZETA", "CS:CDXIG"])
+def test_bootstrapped_curve_reprices_every_quote(mkt, name):
+    f = mkt[name]
+    for tenor, quote in zip(f.tenors, f.values):
+        assert par_spread(mkt, name, tenor) == pytest.approx(quote, rel=1e-8)
+
+
+def test_cds_at_par_is_worth_zero_and_protection_gains_on_widening(mkt):
     s = par_spread(mkt, "CS:ACME", 5.0)
     leg = CDSLeg("CS:ACME", 5.0, s, 1e7)
     assert leg.pv(mkt) == pytest.approx(0, abs=1e-6)
     assert leg.pv(mkt.bump("CS:ACME", 0.001)) > 0
-    # Credit triangle: flat spread s gives a par spread close to s.
-    assert s == pytest.approx(mkt["CS:ACME"].values[3], rel=0.15)
+
+
+def test_ois_swap_accrues_overnight_carry(mkt):
+    k = par_rate(mkt, "USD", 0, 2)
+    payer = SwapLeg.spot_starting(mkt, "USD", 2, k, 1e9)
+    assert payer.pv(mkt) == pytest.approx(0, abs=1e-3)
+    # Overnight (4.30%) above the 2y fixed rate: paying fixed earns positive carry.
+    assert mkt["IR:USD"].values[0] > k
+    assert payer.pv(mkt.roll(1)) > 0

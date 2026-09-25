@@ -46,7 +46,7 @@ CMDTY = {"BRENT": (0.020, -0.3), "TTF": (0.040, 1.2), "JKM": (0.035, 1.0)}
 # Equity: daily vol, loading on the global driver, currency-local vol reaction
 EQUITY = {"SPX": (0.011, 1.00), "SX5E": (0.012, 0.85), "NWT": (0.022, 0.70)}
 EQ_VOL_BETA = -0.9  # d(implied vol) per unit return (leverage effect)
-RATES = {"USD": 0.0006, "EUR": 0.0005}  # daily level move, 6bp / 5bp
+RATES = {"USD": 0.00035, "EUR": 0.0003}  # daily level move, 3.5bp / 3bp
 FX_VOL = 0.0055
 CREDIT_REL_VOL = 0.03  # daily relative spread move on the common driver
 
@@ -82,7 +82,8 @@ def synthetic_history(
     rng = np.random.default_rng(seed)
     df_t = 4
     t_scale = np.sqrt((df_t - 2) / df_t)
-    chi = rng.chisquare(df_t, size=(n_days, 1)) / df_t
+    # Floor the chi-square draw so one day cannot scale moves by more than 2x t(4)'s unit scale.
+    chi = np.maximum(rng.chisquare(df_t, size=(n_days, 1)) / df_t, 0.25)
     z = (
         (rng.standard_normal((n_days, len(DRIVERS))) @ np.linalg.cholesky(CORR).T)
         / np.sqrt(chi)

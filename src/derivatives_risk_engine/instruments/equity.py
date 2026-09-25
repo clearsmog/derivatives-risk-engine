@@ -98,6 +98,9 @@ class DownAndOutCallLeg:
 
     def pv(self, mkt: Market) -> float:
         _, df, t = _forward(mkt, self.underlying, self.expiry)
+        if t <= 0.0:
+            s = mkt.spot(self.underlying)
+            return self.quantity * max(s - self.strike, 0.0) * mkt.fx(_ccy(mkt, self.underlying))
         r = -np.log(df) / t
         q = mkt.static["dividend_yield"][self.underlying]
         vol = mkt.vol_at(f"VOL:{self.underlying}", t)

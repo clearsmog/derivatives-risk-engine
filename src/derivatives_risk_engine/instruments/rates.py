@@ -1,7 +1,9 @@
 """Interest-rate legs: vanilla swaps and European swaptions.
 
-Single-curve pricing: the zero curve both discounts and projects, so a
-floating leg from s to e is worth DF(s) - DF(e). Fixed legs pay annually.
+Single-curve OIS pricing: the zero curve both discounts and projects. A
+floating leg compounds the overnight rate, so once it has started it is worth
+the compounding already realised minus DF(end); before it starts it is worth
+DF(start) - DF(end). Fixed legs pay annually, on plain year fractions.
 Swaptions use the Bachelier (normal) model on the forward swap rate, which
 MAR21.28 allows for GIRR vega.
 """
@@ -19,8 +21,9 @@ from .base import all_pillars
 
 
 def annuity(mkt: Market, ccy: str, start: float, end: float) -> float:
+    """Annual fixed-leg annuity over coupons not yet paid."""
     pay = np.arange(start + 1.0, end + 1e-9, 1.0)
-    return float(sum(mkt.df(ccy, t) for t in pay))
+    return float(sum(mkt.df(ccy, t) for t in pay if t > mkt.time_shift))
 
 
 def forward_swap_rate(mkt: Market, ccy: str, start: float, end: float) -> float:
@@ -41,13 +44,23 @@ class SwapLeg:
     end: float
     fixed_rate: float
     notional: float  # positive = pay fixed, receive floating
+    overnight: float | None = None  # overnight rate realised since the start (flat)
 
     is_option = False
     expiry = None
     underlying_maturity = None
 
+    @classmethod
+    def spot_starting(cls, mkt: Market, ccy: str, end: float, fixed_rate: float, notional: float):
+        """A swap starting today; accrual runs at today's shortest zero rate."""
+        return cls(ccy, 0.0, end, fixed_rate, notional, float(mkt[f"IR:{ccy}"].values[0]))
+
     def pv(self, mkt: Market) -> float:
-        floating = mkt.df(self.ccy, self.start) - mkt.df(self.ccy, self.end)
+        if self.overnight is not None and self.start <= mkt.time_shift:
+            realised = np.exp(self.overnight * (mkt.time_shift - self.start))
+            floating = realised - mkt.df(self.ccy, self.end)
+        else:
+            floating = mkt.df(self.ccy, self.start) - mkt.df(self.ccy, self.end)
         fixed = self.fixed_rate * annuity(mkt, self.ccy, self.start, self.end)
         return self.notional * (floating - fixed) * mkt.fx(self.ccy)
 
