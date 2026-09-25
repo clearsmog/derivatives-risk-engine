@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from commodity_risk_engine.engine import run, summary_tables
+from derivatives_risk_engine.engine import run, summary_tables
 
 OUT = Path(__file__).resolve().parent.parent / "outputs"
 

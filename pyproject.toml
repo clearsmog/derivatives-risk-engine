@@ -1,5 +1,5 @@
 [project]
-name = "commodity-risk-engine"
+name = "derivatives-risk-engine"
 version = "0.1.0"
 description = "Commodity derivatives risk engine: pricing, Greeks, VaR/ES, P&L explain and FRTB SA (commodity), with an Atoti cube"
 readme = "README.md"

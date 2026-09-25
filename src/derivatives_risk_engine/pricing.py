@@ -107,3 +107,98 @@ def asian_mc(
     payoff = np.maximum(avg - strike, 0.0) if is_call else np.maximum(strike - avg, 0.0)
     disc = df * payoff
     return float(disc.mean()), float(disc.std(ddof=1) / np.sqrt(n_paths))
+
+
+def bachelier(
+    fwd: float, strike: float, normal_vol: float, t: float, annuity: float, is_payer: bool
+) -> float:
+    """Normal-model swaption: annuity * [(F - K) N(d) + sigma sqrt(t) n(d)] for a payer."""
+    if t <= 0.0 or normal_vol <= 0.0:
+        return annuity * max((fwd - strike) if is_payer else (strike - fwd), 0.0)
+    sd = normal_vol * np.sqrt(t)
+    d = (fwd - strike) / sd
+    if is_payer:
+        return annuity * ((fwd - strike) * norm.cdf(d) + sd * norm.pdf(d))
+    return annuity * ((strike - fwd) * norm.cdf(-d) + sd * norm.pdf(d))
+
+
+def down_and_out_call(
+    spot: float, strike: float, barrier: float, vol: float, t: float, r: float, q: float
+) -> float:
+    """Continuously monitored down-and-out call, strike at or above the barrier.
+
+    Reflection principle (Merton 1973; Reiner-Rubinstein 1991):
+        C_do = C(S, K) - (H / S)^(2 lambda - 2) * C(H^2 / S, K),
+        lambda = (r - q + sigma^2 / 2) / sigma^2,
+    where C is the Black-Scholes call with rate r and dividend yield q.
+    """
+    if spot <= barrier:
+        return 0.0
+    if strike < barrier:
+        raise ValueError("down_and_out_call implemented for strike >= barrier only")
+
+    def bs_call(s: float) -> float:
+        fwd = s * np.exp((r - q) * t)
+        return black76(fwd, strike, vol, t, np.exp(-r * t), True)
+
+    lam = (r - q + 0.5 * vol * vol) / (vol * vol)
+    return bs_call(spot) - (barrier / spot) ** (2 * lam - 2) * bs_call(barrier * barrier / spot)
+
+
+def barrier_mc(
+    spot: float, strike: float, barrier: float, vol: float, t: float, r: float, q: float,
+    n_paths: int = 100_000, n_steps: int = 500, seed: int = 11,
+) -> tuple[float, float]:
+    """Monte Carlo check for down_and_out_call. To mimic continuous monitoring on
+    a discrete grid, the barrier is moved towards spot by the Broadie-Glasserman-
+    Kou shift, H * exp(+0.5826 sigma sqrt(dt))."""
+    rng = np.random.default_rng(seed)
+    dt = t / n_steps
+    h_eff = barrier * np.exp(0.5826 * vol * np.sqrt(dt))
+    log_s = np.full(n_paths, np.log(spot))
+    alive = np.ones(n_paths, dtype=bool)
+    drift = (r - q - 0.5 * vol * vol) * dt
+    for _ in range(n_steps):
+        log_s += drift + vol * np.sqrt(dt) * rng.standard_normal(n_paths)
+        alive &= log_s > np.log(h_eff)
+    payoff = np.where(alive, np.maximum(np.exp(log_s) - strike, 0.0), 0.0) * np.exp(-r * t)
+    return float(payoff.mean()), float(payoff.std(ddof=1) / np.sqrt(n_paths))
+
+
+def cds_legs(
+    spread_tenors: np.ndarray,
+    par_spreads: np.ndarray,
+    recovery: float,
+    maturity: float,
+    discount,
+    time_shift: float = 0.0,
+    freq: int = 4,
+) -> tuple[float, float]:
+    """Risky annuity (premium leg per unit spread) and protection leg per unit notional.
+
+    Hazard rates are piecewise constant between spread pillars, set by the
+    credit triangle lambda_i = s_i / (1 - R). This is a transparent
+    approximation, not the ISDA standard model (no bootstrap, no accrual on
+    default). `discount(t)` returns the discount factor to valuation-date time t.
+    """
+    lam = par_spreads / (1.0 - recovery)
+    edges = np.concatenate([[0.0], spread_tenors[:-1]])
+
+    def survival(t: float) -> float:
+        # integral of the step hazard from 0 to t
+        dur = np.clip(t - edges, 0.0, None)
+        width = np.append(np.diff(edges), np.inf)
+        return float(np.exp(-np.sum(lam * np.minimum(dur, width))))
+
+    pay = np.arange(1, int(round(maturity * freq)) + 1) / freq
+    pay = pay[pay > time_shift]
+    annuity, protection, prev = 0.0, 0.0, time_shift
+    q_prev = 1.0
+    for t in pay:
+        tau = t - time_shift
+        q = survival(tau)
+        df = discount(t)
+        annuity += (t - prev) * df * q
+        protection += (1.0 - recovery) * df * (q_prev - q)
+        prev, q_prev = t, q
+    return annuity, protection

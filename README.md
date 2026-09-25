@@ -1,4 +1,4 @@
-# commodity-risk-engine
+# derivatives-risk-engine
 
 A daily risk batch for an LNG trading book: pricing, Greeks, historical VaR and
 ES by full revaluation, stress tests, P&L explain, the FRTB P&L attribution
@@ -17,7 +17,7 @@ uv sync
 uv run pytest                              # the cube test is skipped without Atoti
 uv run python scripts/run_demo.py          # risk pack -> outputs/
 uv sync --extra cube                       # adds Atoti
-uv run --extra cube python -m commodity_risk_engine.cube   # cube + web UI
+uv run --extra cube python -m derivatives_risk_engine.cube   # cube + web UI
 ```
 
 ## What it computes
