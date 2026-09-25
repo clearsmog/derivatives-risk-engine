@@ -115,7 +115,7 @@ def stress_scenarios(n_months: int = 36) -> ScenarioSet:
             "TTF": (1.50, 0.60),
             "JKM": (1.20, 0.50),
         },
-        "Oil spike, gas flat": {
+        "Oil spike with gas flat": {
             "BRENT": (0.40, 0.15),
             "TTF": (0.0, 0.0),
             "JKM": (0.0, 0.0),

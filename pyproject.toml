@@ -1,7 +1,7 @@
 [project]
 name = "commodity-risk-engine"
 version = "0.1.0"
-description = "Add your description here"
+description = "Commodity derivatives risk engine: pricing, Greeks, VaR/ES, P&L explain and FRTB SA (commodity), with an Atoti cube"
 readme = "README.md"
 authors = [
     { name = "clearsmog", email = "zqkntu@gmail.com" }
@@ -11,6 +11,12 @@ dependencies = [
     "numpy>=2.5.3",
     "pandas>=3.0.6",
     "scipy>=1.18.1",
+    "tabulate>=0.10.0",
+]
+
+[project.optional-dependencies]
+cube = [
+    "atoti>=6.2.1",
 ]
 
 [build-system]
