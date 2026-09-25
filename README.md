@@ -12,7 +12,7 @@ invented.
 
 ```
 uv sync
-uv run pytest                              # 59 tests; the cube test skips without Atoti
+uv run pytest                              # 60 tests; without Atoti the cube test skips (59 run)
 uv run python scripts/run_demo.py          # risk pack -> outputs/risk_pack.md
 uv sync --extra cube
 uv run --extra cube python -m derivatives_risk_engine.cube   # cubes + web UI
