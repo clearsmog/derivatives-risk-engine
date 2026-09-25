@@ -3,8 +3,8 @@
 Time is measured in years from the valuation date. Contract month m (m >= 1)
 averages over [m/12, (m+1)/12); month 0 is the prompt month already in delivery
 and is not traded in the synthetic book. Implied vol is one ATM number per
-contract month (no smile), held sticky-strike when forwards move, which is one
-of the two conventions MAR21.27 allows.
+contract month and no smile, so the sticky-strike vs sticky-delta choice
+(MAR21.27) does not arise: vol stays put when forwards move.
 """
 
 from __future__ import annotations

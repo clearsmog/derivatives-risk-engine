@@ -7,10 +7,13 @@ risk models:
 * fat tails        Student-t shocks, 4 degrees of freedom
 * vol clustering   a GARCH(1,1) multiplier shared across the market
 * Samuelson effect front months move more than back months
-* curve shape      level, slope and curvature factors per commodity
+* curve shape      level, slope and curvature factors per commodity, plus a
+                   winter-summer seasonal factor on the gas curves
 * spread risk      Brent and the gas hubs are only loosely correlated
-* a stress window  a 60-day gas squeeze late in the sample, for stressed ES
-* vol-price link   implied vol rises when gas rallies (positive skew)
+* a stress window  a 60-day gas squeeze inside the sample, so the VaR window
+                   contains a stressed period
+* vol-price link   gas vol rises when gas rallies (positive skew); oil vol
+                   rises when oil falls (negative skew)
 
 Swap in a real history by supplying the same dict-of-arrays shape.
 """
@@ -30,7 +33,7 @@ LEVEL_CORR = np.array(
         [0.40, 0.80, 1.00],
     ]
 )
-VOL_BETA = {"BRENT": 0.3, "TTF": 1.2, "JKM": 1.0}  # d(implied vol) per unit log-return
+VOL_BETA = {"BRENT": -0.3, "TTF": 1.2, "JKM": 1.0}  # d(implied vol) per unit log-return
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,10 @@ def synthetic_history(
     other = rng.standard_normal((n_days, 3, 2))
     garch = _garch_multiplier(n_days, rng)
 
+    # Winter-summer spread shocks, shared 70% between TTF and JKM.
+    seasonal = np.cos(2 * np.pi * (m - 1) / 12.0)
+    season = rng.standard_normal((n_days, 2)) @ np.linalg.cholesky([[1.0, 0.7], [0.7, 1.0]]).T
+
     stress = np.ones(n_days)
     if stress_start is not None:
         stress[stress_start : stress_start + 60] = 2.5
@@ -97,6 +104,8 @@ def synthetic_history(
         mult = garch * (stress if gas else 1.0 + 0.3 * (stress - 1.0))
         factors = np.column_stack([level[:, j], other[:, j, 0], other[:, j, 1]])
         fwd[c] = FRONT_VOL[c] * mult[:, None] * (factors @ loadings)
+        if gas:
+            fwd[c] += FRONT_VOL[c] * mult[:, None] * 0.35 * season[:, [j - 1]] * seasonal
         vol[c] = VOL_BETA[c] * fwd[c] + 0.004 * rng.standard_normal((n_days, n_months))
     return ScenarioSet(fwd, vol, [f"D{d:03d}" for d in range(n_days)])
 

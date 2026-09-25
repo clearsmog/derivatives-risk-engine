@@ -4,7 +4,7 @@ that approximate it.
 Full revaluation reprices every leg under every scenario. The Taylor proxy
 rebuilds P&L from the leg sensitivities:
 
-    dV ~ delta_ln * r + 0.5 * gamma_ln * r^2 + vega * d_sigma
+    dV ~ cash_delta * R + 0.5 * cash_gamma * R^2 + vega * d_sigma   (R simple return)
 
 Comparing the two by trade is how the engine shows where a sensitivity-based
 view of an option book stops being trustworthy.
@@ -33,13 +33,15 @@ def scenario_pnl(trades: list[Trade], mkt: Market, scen: ScenarioSet) -> pd.Data
 def taylor_pnl(
     legs: pd.DataFrame, scen: ScenarioSet, order: str = "delta_gamma_vega"
 ) -> pd.DataFrame:
-    """Sensitivity-based P&L per trade. order: 'delta', 'delta_gamma' or 'delta_gamma_vega'."""
+    """Sensitivity-based P&L per trade in cash terms, on simple returns R:
+    delta_cash * R + 0.5 * gamma_cash * R^2 + vega * d_sigma.
+    order: 'delta', 'delta_gamma' or 'delta_gamma_vega'."""
     out: dict[str, np.ndarray] = {}
     for row in legs.itertuples():
-        r = scen.fwd[row.commodity][:, row.month]
-        pnl = row.delta_ln * r
+        ret = np.expm1(scen.fwd[row.commodity][:, row.month])
+        pnl = row.delta_cash * ret
         if order != "delta":
-            pnl = pnl + 0.5 * row.gamma_ln * r**2
+            pnl = pnl + 0.5 * row.gamma_cash * ret**2
         if order == "delta_gamma_vega":
             pnl = pnl + row.vega * scen.vol[row.commodity][:, row.month]
         out[row.trade_id] = out.get(row.trade_id, 0.0) + pnl
@@ -60,25 +62,3 @@ def expected_shortfall(pnl: np.ndarray, level: float = 0.975) -> float:
     """Average loss beyond the (1 - level) tail, as a positive number."""
     k = max(int(np.floor(len(pnl) * (1.0 - level))), 1)
     return float(-np.sort(pnl)[:k].mean())
-
-
-def component_var(pnl: pd.DataFrame, level: float = 0.99) -> pd.Series:
-    """Each trade's P&L in the scenario that sets portfolio VaR.
-
-    Contributions sum exactly to the portfolio VaR number (Euler allocation
-    for a historical-simulation quantile). Noisy for a single scenario; an
-    ES-based allocation averages the tail instead.
-    """
-    total = pnl.sum(axis=0).to_numpy()
-    idx = int(np.argsort(total, kind="stable")[_var_index(len(total), level)])
-    return -pnl.iloc[:, idx]
-
-
-def risk_summary(pnl: pd.DataFrame) -> dict[str, float]:
-    total = pnl.sum(axis=0).to_numpy()
-    return {
-        "VaR 99% 1d": var(total, 0.99),
-        "ES 97.5% 1d": expected_shortfall(total, 0.975),
-        "Worst day": float(-total.min()),
-        "Undiversified VaR 99%": float(sum(var(r, 0.99) for r in pnl.to_numpy())),
-    }

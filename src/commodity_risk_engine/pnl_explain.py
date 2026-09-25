@@ -5,7 +5,7 @@ moves (it is not aged along the path, so no option fixes or expires mid-test):
 
     HPL   (hypothetical P&L)       full revaluation, one business day later
     RTPL  (risk-theoretical P&L)   rebuilt from today's sensitivities:
-          delta_ln * r + 0.5 * gamma_ln * r^2 + vega * d_sigma + theta
+          delta_cash * R + 0.5 * gamma_cash * R^2 + vega * d_sigma + theta  (R simple return)
     unexplained = HPL - RTPL
 
 MAR32 compares the two series per trading desk over 250 days with a Spearman
@@ -29,19 +29,44 @@ GREEN = {"spearman": 0.80, "ks": 0.09}
 RED = {"spearman": 0.70, "ks": 0.12}
 
 
+def proxy_model(history: ScenarioSet, anchor: int = 1, naive: bool = False) -> ScenarioSet:
+    """A coarse one-factor risk model per commodity, fitted on `history`.
+
+    Every pillar's move is predicted as beta_m times the anchor month's move,
+    with beta_m estimated by least squares (separately for forwards and vols).
+    It captures the level of each curve and the Samuelson decay of vol along
+    it, but not independent curve-shape moves such as a winter-summer spread.
+    Returned as betas packed in a one-row ScenarioSet-shaped container.
+
+    naive=True sets every beta to 1: the anchor month's move is copied onto the
+    whole curve, overstating back-month moves (they are less volatile).
+    """
+    def betas(x: np.ndarray) -> np.ndarray:
+        if naive:
+            return np.ones(x.shape[1])
+        a = x[:, anchor]
+        return (x * a[:, None]).sum(axis=0) / (a @ a)
+
+    return ScenarioSet(
+        {c: betas(v)[None, :] for c, v in history.fwd.items()},
+        {c: betas(v)[None, :] for c, v in history.vol.items()},
+        ["beta"],
+    )
+
+
 def explain(
     trades: list[Trade],
     mkt: Market,
     legs: pd.DataFrame,
     path: ScenarioSet,
-    proxy_month: int | None = None,
+    proxy: ScenarioSet | None = None,
+    anchor: int = 1,
 ) -> pd.DataFrame:
     """Long table: one row per trade per day with HPL, the Greek components of
     RTPL, and the unexplained residual.
 
-    proxy_month mimics a risk model with a coarse factor set: every pillar of a
-    curve is driven by that one contract month's move, so curve-shape and
-    seasonal-spread risk vanish from RTPL but not from HPL.
+    With `proxy` (from proxy_model), RTPL sees only the anchor month's move
+    mapped through the fitted betas, as a coarse risk model would.
     """
     rolled = [mkt.apply_returns(*path.row(d)).roll(1) for d in range(path.n)]
     base = {t.trade_id: t.pv(mkt) for t in trades}
@@ -52,13 +77,17 @@ def explain(
 
     comp = {}
     for r in legs.itertuples():
-        col = r.month if proxy_month is None else proxy_month
-        ret = path.fwd[r.commodity][:, col]
-        dvol = path.vol[r.commodity][:, col]
+        c, m = r.commodity, r.month
+        if proxy is None:
+            log_ret, dvol = path.fwd[c][:, m], path.vol[c][:, m]
+        else:
+            log_ret = proxy.fwd[c][0, m] * path.fwd[c][:, anchor]
+            dvol = proxy.vol[c][0, m] * path.vol[c][:, anchor]
+        ret = np.expm1(log_ret)
         parts = np.stack(
             [
-                r.delta_ln * ret,
-                0.5 * r.gamma_ln * ret**2,
+                r.delta_cash * ret,
+                0.5 * r.gamma_cash * ret**2,
                 r.vega * dvol,
                 np.full(path.n, r.theta),
             ]

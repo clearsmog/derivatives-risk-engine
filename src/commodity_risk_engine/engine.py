@@ -27,9 +27,11 @@ class RiskRun:
     leg_stress: np.ndarray  # (n_legs, n_stress)
     trade_pnl: pd.DataFrame  # trade x history scenario
     explain: pd.DataFrame  # P&L explain on the out-of-sample path
-    explain_proxy: pd.DataFrame  # same, risk model on a front-month proxy
+    explain_proxy: pd.DataFrame  # same, one-factor-per-curve risk model (fitted betas)
+    explain_naive: pd.DataFrame  # same, front-month move copied onto the whole curve
     frtb_book: frtb.SbmResult
     frtb_desks: dict[str, frtb.SbmResult]
+    frtb_book_hubs_distinct: frtb.SbmResult  # TTF and JKM as distinct commodities
 
 
 def _leg_pnl(trades: list[Trade], mkt: Market, scen: ScenarioSet) -> np.ndarray:
@@ -42,11 +44,14 @@ def _leg_pnl(trades: list[Trade], mkt: Market, scen: ScenarioSet) -> np.ndarray:
     return np.array(rows)
 
 
-def _sbm(trades: list[Trade], mkt: Market, legs: pd.DataFrame) -> frtb.SbmResult:
+def _sbm(
+    trades: list[Trade], mkt: Market, legs: pd.DataFrame, gas_hubs_distinct: bool = False
+) -> frtb.SbmResult:
     return frtb.sbm_commodity(
         frtb.delta_weighted_sensitivities(legs),
         frtb.vega_weighted_sensitivities(legs),
         frtb.curvature_cvr(trades, mkt, legs),
+        gas_hubs_distinct,
     )
 
 
@@ -86,9 +91,15 @@ def run(
         leg_stress=_leg_pnl(trades, mkt, stress),
         trade_pnl=trade_pnl,
         explain=pnl_explain.explain(trades, mkt, legs, path),
-        explain_proxy=pnl_explain.explain(trades, mkt, legs, path, proxy_month=1),
+        explain_proxy=pnl_explain.explain(
+            trades, mkt, legs, path, proxy=pnl_explain.proxy_model(hist)
+        ),
+        explain_naive=pnl_explain.explain(
+            trades, mkt, legs, path, proxy=pnl_explain.proxy_model(hist, naive=True)
+        ),
         frtb_book=_sbm(trades, mkt, legs),
         frtb_desks=desks,
+        frtb_book_hubs_distinct=_sbm(trades, mkt, legs, gas_hubs_distinct=True),
     )
 
 
@@ -113,11 +124,17 @@ def summary_tables(r: RiskRun) -> dict[str, pd.DataFrame]:
     var_table.loc["Sum of desks"] = var_table.drop("BOOK").sum()
 
     greeks = r.legs.groupby(["commodity"])[
-        ["pv", "delta_ln", "gamma_cash", "vega", "theta"]
+        ["pv", "delta_cash", "gamma_cash", "vega", "theta"]
     ].sum()
+    greeks = (greeks[["delta_cash", "gamma_cash", "vega"]] / 100).join(greeks[["pv", "theta"]])
     greeks = greeks.rename(
-        columns={"delta_ln": "delta (1% move x100)", "gamma_cash": "cash gamma"}
-    )
+        columns={
+            "delta_cash": "delta: P&L per +1%",
+            "gamma_cash": "gamma: delta change per +1%",
+            "vega": "vega: P&L per +1 vol pt",
+            "theta": "theta: 1 day",
+        }
+    )[["pv", "delta: P&L per +1%", "gamma: delta change per +1%", "vega: P&L per +1 vol pt", "theta: 1 day"]]
 
     taylor = {}
     for order in ("delta", "delta_gamma", "delta_gamma_vega"):
@@ -137,7 +154,8 @@ def summary_tables(r: RiskRun) -> dict[str, pd.DataFrame]:
     stress_by_book["BOOK"] = stress_by_book.sum(axis=1)
 
     pla = pnl_explain.pla_by_desk(r.explain, books).add_prefix("full_")
-    pla_proxy = pnl_explain.pla_by_desk(r.explain_proxy, books).add_prefix("proxy_")
+    pla_proxy = pnl_explain.pla_by_desk(r.explain_proxy, books).add_prefix("beta_")
+    pla_naive = pnl_explain.pla_by_desk(r.explain_naive, books).add_prefix("naive_")
 
     frtb_desk = pd.DataFrame(
         {
@@ -150,13 +168,18 @@ def summary_tables(r: RiskRun) -> dict[str, pd.DataFrame]:
         *r.frtb_book.by_scenario.loc[r.frtb_book.binding_scenario],
         r.frtb_book.binding_scenario,
     ]
+    alt = r.frtb_book_hubs_distinct
+    frtb_desk.loc["BOOK, TTF/JKM distinct"] = [
+        *alt.by_scenario.loc[alt.binding_scenario],
+        alt.binding_scenario,
+    ]
 
     return {
         "var": var_table,
         "greeks": greeks,
         "taylor_vs_full": pd.DataFrame(taylor).T,
         "stress": stress_by_book,
-        "pla": pd.concat([pla, pla_proxy], axis=1),
+        "pla": pd.concat([pla, pla_proxy, pla_naive], axis=1),
         "frtb_by_scenario": r.frtb_book.by_scenario,
         "frtb_by_desk": frtb_desk,
     }

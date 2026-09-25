@@ -56,7 +56,7 @@ def build_cube(r: RiskRun, session: tt.Session) -> tt.Cube:
 
     for label, col in {
         "PV": "pv",
-        "Delta (x1% move = /100)": "delta_ln",
+        "Delta (x1% move = /100)": "delta_cash",
         "Cash gamma": "gamma_cash",
         "Vega (per vol point = /100)": "vega",
         "Theta 1d": "theta",

@@ -69,9 +69,9 @@ def asian_levy(
     """Arithmetic-average Asian option by lognormal moment matching (Levy 1992).
 
     The average is replaced by a lognormal variable with the same first two
-    moments, then priced with Black-76. This is the Turnbull-Wakeman family of
-    approximations and is the market convention for monthly-average oil and
-    LNG options. Accuracy is checked against Monte Carlo in the tests.
+    moments, then priced with Black-76. Same family as Turnbull-Wakeman;
+    a common quick pricer for monthly-average oil and gas options. It carries a
+    small upward bias against Monte Carlo that the tests bound.
     """
     m1, m2 = asian_moments(fwds, vols, fix_times)
     t_last = float(np.max(fix_times))

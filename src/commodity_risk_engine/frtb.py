@@ -5,13 +5,22 @@ BCBS MAR21 (version in force from 1 Jan 2023). Paragraph references are to
 that text. The UK (PRA) and EU (CRR3) rulebooks carry the same commodity
 parameters; check the local text before relying on this for a live filing.
 
+TTF and JKM. MAR21.83 treats two commodities as distinct only when two
+contracts differ solely in the commodity delivered. TTF (pipeline gas, NW
+Europe) and JKM (LNG, NE Asia) are both natural gas, so the default treats them
+as one commodity at two delivery locations: rho = rho_tenor * rho_basis (99.9%).
+`gas_hubs_distinct=True` applies the 65% bucket-6 rho_cty instead. The default
+is the more conservative reading for this book.
+
 Out of scope: the default risk charge (MAR22, no issuer risk in a commodity
-book) and the residual risk add-on (MAR23).
+book) and the residual risk add-on (MAR23), which Asian options and collars
+would likely attract.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -48,6 +57,8 @@ RHO_CTY = {
     11: 0.15,
 }
 RHO_TENOR = 0.99  # MAR21.83(1)(b)
+RHO_BASIS = 0.999  # MAR21.83(1)(c)
+UNDERLYING = {"BRENT": "crude oil", "TTF": "natural gas", "JKM": "natural gas"}
 
 DELTA_TENORS = np.array([0.0, 0.25, 0.5, 1, 2, 3, 5, 10, 15, 20, 30])  # MAR21.13(1)
 VEGA_TENORS = np.array([0.5, 1, 3, 5, 10])  # MAR21.13(2)
@@ -192,22 +203,29 @@ def _linear_charge(
     return float(np.sqrt(max(total, 0.0))), kb
 
 
-def _delta_rho(b: int, k: tuple, l: tuple) -> float:
-    rho_cty = 1.0 if k[0] == l[0] else RHO_CTY[b]
+def _name_rho(b: int, a: str, c: str, distinct: bool) -> float:
+    """rho_cty * rho_basis between two curves in bucket b."""
+    if a == c:
+        return 1.0
+    if not distinct and UNDERLYING.get(a, a) == UNDERLYING.get(c, c):
+        return RHO_BASIS
+    return RHO_CTY[b]
+
+
+def _delta_rho(b: int, k: tuple, l: tuple, distinct: bool) -> float:
     rho_tenor = 1.0 if k[1] == l[1] else RHO_TENOR
-    # rho_basis (MAR21.83(1)(c), 99.9%) is 1 here: one delivery location per commodity
-    return rho_cty * rho_tenor
+    return _name_rho(b, k[0], l[0], distinct) * rho_tenor
 
 
-def _vega_rho(b: int, k: tuple, l: tuple) -> float:
+def _vega_rho(b: int, k: tuple, l: tuple, distinct: bool) -> float:
     """MAR21.94: delta correlation between the underlyings times option-maturity decay."""
-    rho_delta = 1.0 if k[0] == l[0] else RHO_CTY[b]
+    rho_delta = _name_rho(b, k[0], l[0], distinct)
     rho_opt = np.exp(-ALPHA * abs(k[1] - l[1]) / min(k[1], l[1]))
     return min(rho_delta * rho_opt, 1.0)
 
 
 def _curvature_charge(
-    cvr: pd.DataFrame, scenario: str
+    cvr: pd.DataFrame, scenario: str, distinct: bool
 ) -> tuple[float, dict[int, float]]:
     """MAR21.5(3)-(4). Curvature correlations are the squared delta ones
     (MAR21.100-101); the scenario adjustment is applied to the squared value."""
@@ -217,14 +235,13 @@ def _curvature_charge(
     kb, sb = {}, {}
     for b, g in net.groupby("bucket"):
         names = list(g.commodity)
-        rho = adjust(RHO_CTY[b] ** 2, scenario)
 
         def k_side(x: np.ndarray) -> float:
             tot = float(np.sum(np.maximum(x, 0.0) ** 2))
             for i in range(len(x)):
                 for j in range(len(x)):
                     if i != j and not (x[i] < 0 and x[j] < 0):
-                        r = 1.0 if names[i] == names[j] else rho
+                        r = adjust(_name_rho(b, names[i], names[j], distinct) ** 2, scenario)
                         tot += r * x[i] * x[j]
             return float(np.sqrt(max(tot, 0.0)))
 
@@ -248,13 +265,22 @@ class SbmResult:
 
 
 def sbm_commodity(
-    delta_ws: pd.DataFrame, vega_ws: pd.DataFrame, cvr: pd.DataFrame
+    delta_ws: pd.DataFrame,
+    vega_ws: pd.DataFrame,
+    cvr: pd.DataFrame,
+    gas_hubs_distinct: bool = False,
 ) -> SbmResult:
+    if not gas_hubs_distinct and len(vega_ws):
+        # MAR21.13(2): vega factors are not split by delivery location, so
+        # same-underlying vegas become one risk factor and net.
+        vega_ws = vega_ws.assign(commodity=vega_ws.commodity.map(UNDERLYING))
+    rho_d = partial(_delta_rho, distinct=gas_hubs_distinct)
+    rho_v = partial(_vega_rho, distinct=gas_hubs_distinct)
     rows, detail = {}, []
     for sc in SCENARIOS:
-        d, d_kb = _linear_charge(delta_ws, _delta_rho, sc)
-        v, v_kb = _linear_charge(vega_ws, _vega_rho, sc) if len(vega_ws) else (0.0, {})
-        c, c_kb = _curvature_charge(cvr, sc)
+        d, d_kb = _linear_charge(delta_ws, rho_d, sc)
+        v, v_kb = _linear_charge(vega_ws, rho_v, sc) if len(vega_ws) else (0.0, {})
+        c, c_kb = _curvature_charge(cvr, sc, gas_hubs_distinct)
         rows[sc] = {"delta": d, "vega": v, "curvature": c, "total": d + v + c}
         for measure, kbs in (("delta", d_kb), ("vega", v_kb), ("curvature", c_kb)):
             detail += [(sc, measure, b, k) for b, k in kbs.items()]

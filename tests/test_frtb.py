@@ -1,5 +1,7 @@
 """Hand-computed checks of the MAR21 commodity aggregation."""
 
+from functools import partial
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -33,8 +35,9 @@ NO_CVR = pd.DataFrame(columns=["trade_id", "commodity", "bucket", "cvr_up", "cvr
 NO_VEGA = ws([]).iloc[0:0]
 
 
-def delta_charge(rows, scenario="medium"):
-    return frtb._linear_charge(ws(rows), frtb._delta_rho, scenario)[0]
+def delta_charge(rows, scenario="medium", distinct=True):
+    rho = partial(frtb._delta_rho, distinct=distinct)
+    return frtb._linear_charge(ws(rows), rho, scenario)[0]
 
 
 def test_single_sensitivity_is_risk_weight_times_size():
@@ -50,13 +53,44 @@ def test_same_commodity_different_tenor_uses_99pct():
     ) == pytest.approx(expected)
 
 
-def test_ttf_jkm_are_distinct_commodities_in_one_bucket():
+def test_ttf_jkm_distinct_commodities_use_bucket_rho():
     w1, w2 = 45.0, -45.0
     for sc, rho in [("medium", 0.65), ("high", 0.8125), ("low", 0.4875)]:
         expected = np.sqrt(w1**2 + w2**2 + 2 * rho * w1 * w2)
-        assert delta_charge(
-            [("TTF", 1.0, 100.0), ("JKM", 1.0, -100.0)], sc
-        ) == pytest.approx(expected)
+        rows = [("TTF", 1.0, 100.0), ("JKM", 1.0, -100.0)]
+        assert delta_charge(rows, sc, distinct=True) == pytest.approx(expected)
+
+
+def test_ttf_jkm_as_one_commodity_use_basis_rho():
+    w1, w2 = 45.0, -45.0
+    expected = np.sqrt(w1**2 + w2**2 + 2 * 0.999 * w1 * w2)
+    rows = [("TTF", 1.0, 100.0), ("JKM", 1.0, -100.0)]
+    assert delta_charge(rows, distinct=False) == pytest.approx(expected)
+
+
+def test_curvature_bucket_aggregation_by_hand():
+    # Two positive CVRs in bucket 6 (distinct): Kb = sqrt(a^2 + b^2 + 2 rho^2 a b).
+    cvr = pd.DataFrame(
+        [("T1", "TTF", 6, 10.0, -5.0), ("T2", "JKM", 6, 4.0, -2.0)],
+        columns=["trade_id", "commodity", "bucket", "cvr_up", "cvr_down"],
+    )
+    k, kb = frtb._curvature_charge(cvr, "medium", distinct=True)
+    expected = np.sqrt(10**2 + 4**2 + 2 * 0.65**2 * 10 * 4)
+    assert kb[6] == pytest.approx(expected) and k == pytest.approx(expected)
+
+
+def test_curvature_psi_drops_two_negative_cvrs():
+    cvr = pd.DataFrame(
+        [("T1", "TTF", 6, -10.0, -6.0), ("T2", "JKM", 6, -4.0, -3.0)],
+        columns=["trade_id", "commodity", "bucket", "cvr_up", "cvr_down"],
+    )
+    k, kb = frtb._curvature_charge(cvr, "medium", distinct=True)
+    assert kb[6] == 0.0 and k == 0.0
+
+
+def test_vega_maturity_decay():
+    rho = frtb._vega_rho(6, ("TTF", 0.5), ("TTF", 1.0), distinct=True)
+    assert rho == pytest.approx(np.exp(-0.01 * 0.5 / 0.5))
 
 
 def test_cross_bucket_gamma_is_20pct():

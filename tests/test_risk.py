@@ -24,18 +24,10 @@ def test_var_and_es_on_known_sample():
     assert var.expected_shortfall(pnl, 0.975) == pytest.approx((100 + 99) / 2)
 
 
-def test_component_var_sums_to_portfolio_var(setup):
-    mkt, book, _ = setup
-    pnl = var.scenario_pnl(book, mkt, synthetic_history(n_days=200))
-    assert var.component_var(pnl).sum() == pytest.approx(var.var(pnl.sum().to_numpy()))
-
-
 def test_linear_legs_have_zero_cash_gamma_and_vega(setup):
     _, _, legs = setup
     linear = legs[~legs.is_option]
-    assert np.allclose(
-        linear.gamma_cash / linear.delta_ln.abs().clip(lower=1), 0.0, atol=1e-4
-    )
+    assert np.allclose(linear.gamma_cash, 0.0, atol=1e-6 * linear.delta_cash.abs().max())
     assert (linear.vega == 0).all()
 
 

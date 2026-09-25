@@ -72,6 +72,6 @@ def test_european_leg_matches_analytic_greeks():
     c = mkt.curve("BRENT")
     f, v = c.fwd[6], c.vol[6]
     g = black76_greeks(f, 80.0, v, leg.expiry, mkt.df(leg.expiry), True)
-    assert s.delta_ln == pytest.approx(f * g["delta"], rel=1e-3)
+    assert s.delta_cash == pytest.approx(f * g["delta"], rel=1e-3)
     assert s.gamma_cash == pytest.approx(f * f * g["gamma"], rel=1e-3)
     assert s.vega == pytest.approx(g["vega"], rel=1e-4)

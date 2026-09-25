@@ -193,7 +193,7 @@ def solve_par_fixed(
     def value(k: float) -> float:
         legs = (
             capped_swap(commodity, months, 1.0, k, cap, 1)
-            if cap
+            if cap is not None
             else swap(commodity, months, 1.0, k, 1)
         )
         return sum(leg.pv(mkt) for leg in legs)
