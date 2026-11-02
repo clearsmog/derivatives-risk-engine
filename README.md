@@ -1,4 +1,25 @@
-# derivatives-risk-engine
+<h1 align="center">derivatives-risk-engine</h1>
+
+<p align="center">
+  Price a 27-trade book, revalue it over 500 days, and report VaR, P&amp;L attribution and FRTB capital.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/tests-60-059669?style=flat-square" alt="60 tests">
+  <img src="https://img.shields.io/badge/FRTB-MAR21%20%C2%B7%20MAR32-2563eb?style=flat-square" alt="FRTB MAR21 and MAR32">
+  <img src="https://img.shields.io/badge/cubes-Atoti-1f2937?style=flat-square" alt="Atoti">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748b?style=flat-square" alt="MIT license"></a>
+</p>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/pnl-distribution-dark.png">
+  <img src="docs/images/pnl-distribution-light.png" alt="Histogram of firm daily P&L over 500 synthetic days with VaR 99% at 55.0m and ES 97.5% at 57.0m" width="100%">
+</picture>
+
+| 27 trades, 5 desks | Firm VaR 99% | Sum of desk VaRs | FRTB SA capital | PLA test |
+|:-:|:-:|:-:|:-:|:-:|
+| commodities, equity, rates, FX, credit | **55.0m** | 91.3m | **1,066m** | rates desk fails both proxy models |
 
 A daily market-risk batch for a multi-asset derivatives book: pricing, Greeks,
 historical VaR and ES by full revaluation, stress tests, P&L explain, the FRTB
@@ -10,12 +31,22 @@ counterparty or asset class, one for sensitivities by risk factor and tenor.
 The book and the market history are synthetic. Every name, size and price is
 invented.
 
+## How the batch fits together
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/pipeline.dark.png">
+  <img src="docs/diagrams/pipeline.light.png" alt="Pipeline: market, portfolio and scenarios feed pricing; pricing feeds sensitivities and full-revaluation P&L vectors; these feed VaR/ES, P&L explain and PLA, FRTB SA and two Atoti cubes" width="100%">
+</picture>
+
+## Quick start
+
 ```
 uv sync
 uv run pytest                              # 60 tests; without Atoti the cube test skips (59 run)
 uv run python scripts/run_demo.py          # risk pack -> outputs/risk_pack.md
 uv sync --extra cube
 uv run --extra cube python -m derivatives_risk_engine.cube   # cubes + web UI
+uv run --group docs python scripts/export_gallery.py         # README charts -> docs/images/
 ```
 
 ## The book
@@ -56,6 +87,11 @@ uv run --extra cube python -m derivatives_risk_engine.cube   # cubes + web UI
 | **Firm** | **55.0m** | **57.0m** |
 | Sum of desks | 91.3m | 96.9m |
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/var-diversification-dark.png">
+  <img src="docs/images/var-diversification-light.png" alt="Desk VaRs sum to 91.3m against a firm VaR of 55.0m, a 36.3m (40%) diversification benefit" width="100%">
+</picture>
+
 **Greeks against full revaluation.** At firm level the book is dominated by
 linear commodity and FX delta, and a Greeks proxy lands within 1.5% of full
 revaluation (delta only 55.8m, adding gamma 54.8m, adding vega 55.2m, full
@@ -69,6 +105,11 @@ supply contracts' long-gas, short-oil shape) and loses in an oil spike with
 gas flat (-182m). In a 2020-style crash the equity desk's puts and
 long-vega position gain 195m and the credit desk's net protection gains 112m.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/stress-dark.png">
+  <img src="docs/images/stress-light.png" alt="Heatmap of stress P&L by desk and scenario in USD m" width="100%">
+</picture>
+
 **P&L attribution (Spearman / KS, 250 out-of-sample days).**
 
 | Desk | Full risk factors | One factor per curve, fitted betas | Anchor copied onto the curve |
@@ -78,6 +119,11 @@ long-vega position gain 195m and the credit desk's net protection gains 112m.
 | EQUITY | 0.999 / 0.020 green | 0.982 / 0.036 green | 0.976 / 0.076 green |
 | FX | 1.000 / 0.012 green | 0.977 / 0.028 green | 0.956 / 0.060 green |
 | RATES | 1.000 / 0.012 green | 0.422 / 0.196 red | 0.432 / 0.192 red |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/pla-zones-dark.png">
+  <img src="docs/images/pla-zones-light.png" alt="PLA zones: all desks green under full risk factors; rates red under both proxies; commodities red under the naive proxy" width="100%">
+</picture>
 
 - The full model uses the same pricer and risk factors as HPL, so it only
   measures Taylor truncation and passes trivially.
@@ -100,6 +146,11 @@ scenario.
 | GIRR | 133.6m | 31.8m | 0 | 165.5m |
 | FX | 95.2m | 10.8m | 25.8m | 131.9m |
 | Equity | 9.9m | 28.0m | 0 | 37.9m |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/frtb-capital-dark.png">
+  <img src="docs/images/frtb-capital-light.png" alt="FRTB SA capital by risk class split into delta, vega and curvature" width="100%">
+</picture>
 
 - **Credit basis gets little relief.** The ACME vs CDX position is
   CS01-neutral, but the single name (bucket 4) and the index (bucket 17) only

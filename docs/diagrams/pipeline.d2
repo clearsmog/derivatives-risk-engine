@@ -1,0 +1,32 @@
+# Daily batch in derivatives_risk_engine.engine.run(); module names and counts from the repo README and engine.py.
+direction: right
+
+*: {&leaf: false; class: lane}
+
+inputs: Inputs {
+  mkt: "market.py\nrisk factors × pillars"
+  book: "portfolio.py\n5 desks, 27 trades"
+  scen: "scenarios.py\n500-day history + 6 stresses"
+}
+core: Revaluation {
+  price: "pricing.py + instruments/\nBlack-76, Asians, barrier,\nBachelier, Garman-Kohlhagen, CDS" {class: accent}
+  sens: "sensitivities.py\ndelta, gamma, PV01, CS01, vega"
+  pnl: "var.py\nP&L vector per leg"
+}
+outputs: Risk pack {
+  frtb: "FRTB SA (MAR21)\n5 risk classes"
+  pla: "P&L explain + MAR32 PLA\n3 risk models"
+  var: "VaR 99% / ES 97.5%\nby desk and firm"
+  cube: "2 Atoti cubes\nVaR by desk/book, sens by tenor" {class: good}
+}
+
+inputs.mkt -> core.price
+inputs.book -> core.price
+inputs.scen -> core.pnl: shocks
+core.price -> core.sens: bump
+core.price -> core.pnl: full reval
+core.pnl -> outputs.var
+core.sens -> outputs.pla: Taylor
+core.pnl -> outputs.pla: HPL
+core.sens -> outputs.frtb
+core -> outputs.cube: vectors + sens
